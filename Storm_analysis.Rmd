@@ -1,0 +1,36 @@
+---
+title: "Storm Report"
+author: "Rusell Glynn"
+date: "11/1/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load librarys and copy file to computer.
+
+
+
+```{r }
+library(dplyr)
+library(readr)
+
+url <- 'https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2'
+dest <- "C:/Users/Russell/projects/storm/storm_data.csv.bz2"
+download.file(url,destfile = dest)
+storm <- read_csv('storm_data.csv.bz2')
+```
+
+## Data Exploration of storm data.
+
+You can also embed plots, for example:
+
+```{r exploration, echo=T}
+str(storm)
+names(storm)
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
