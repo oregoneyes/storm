@@ -1,31 +1,50 @@
 ---
-title: "Storm Report"
+title: 'The Relative Impact of Adverse Weather Events on Health, Crop and Property Losses'
 author: "Rusell Glynn"
 date: "11/1/2021"
-output: html_document
+output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Load librarys and copy file to computer.
+## Synopsis:
+
+Adverse weather events are tracked by the U.S National Oceanic and Atmospheric Administration. This information is stored in a publicly available storm database. Using this raw data, we will answer the following two research questions:
+
+1. What types of events (EVTYPE) are most harmful with respect to population health?
+
+2 Across the US, what types of events have the greatest economic impact as measured by property and crop damages?
+
+The raw data has 902297 observations stored in 37 variables. Since only data entered after January, 1996, has complete information on all weather event types (EVTYPE), we will only observations entered after that date. Further, only 8 of the 37 variables have information relevant to the research questions and we will subset the data to only include information in these 8 variables. The population health impact of events will be measured by 'FATALATIES' and 'INJURIES'. The economic impact of weather events is recorded as property and crop dollar losses in 4 separate variables (PROPDMG, PROPDMGEXP, CROPDMG, CROPDMEXP). Data entry errors in the EVTYPE variable complicated the analysis. Using the NOAA data dictionary to inform our decisions, we reclassified  EVTYPE aberrant entries into the official listed categories as completely as possible. Only 350 of 201318 records were not classified in the final data set.
 
 
+## Data Processing
 
-```{r }
+
+### Load R libraries.
+
+```{r library, warning=F}
 library(dplyr)
 library(readr)
+library(lubridate)
+library(naniar)
+library(stringdist)
+library(fuzzyjoin)
+library(stringr)
+```
 
+### Copy file and store locally. Load file into memory as 'storm'.
+
+```{r load, cache=TRUE, warning=F}
 url <- 'https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2'
 dest <- "C:/Users/Russell/projects/storm/storm_data.csv.bz2"
 download.file(url,destfile = dest)
 storm <- read_csv('storm_data.csv.bz2')
 ```
 
-## Data Exploration of storm data.
-
-You can also embed plots, for example:
+### Explore storm data and variable names.
 
 ```{r exploration, echo=T}
 str(storm)
@@ -33,4 +52,247 @@ names(storm)
 
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+### Select the variables of interest to answer questions.
+
+We only need  variables that have to do with event type health(injuries, fatalities), property damage, and crop damage. Similarly, only data recorded from Jan. 1996 onward contains all event types. We will exclude earlier data from our analysis. We will also eliminate all rows without fatalities, injuries, crop or property damage.
+
+```{r select}
+
+# select 8 variables of interest.
+
+storm2 <- storm %>% select(BGN_DATE, EVTYPE, FATALITIES, INJURIES, PROPDMG, PROPDMGEXP, CROPDMG, CROPDMGEXP)
+
+# filter to exclude records entered before January 1, 1996
+
+storm2$BGN_DATE <- as.POSIXlt(storm2$BGN_DATE, format = '%m/%d/%Y %H:%M:%S')
+storm2 <- storm2 %>% filter(BGN_DATE>= as.Date('1996/01/01', format = '%Y/%m/%d'))
+
+# include only records with values other than 0 in the 4 variables with health effects and economic costs.
+
+storm2 <- storm2 %>% filter(FATALITIES != 0 | INJURIES != 0 | PROPDMG != 0 | CROPDMG != 0)
+```
+
+### Calculate property damage and crop damage from PROPDMG, PROPDMGEXP, CROPDMG, and CROPDMGEXP.
+
+Create two new variables with the calculated property damage cost (propcost) and crop damage cost (cropcost)
+
+
+```{r cost}
+
+# Create funtion to convert data in PROPDMGEXP and CROPDMGEXP to number
+
+mult <- function(x) {
+    if(x %in% c("0", "5", "6", "4",  "2",  "3", "7", "1", "8")) {
+       r <- (10^as.numeric(x))
+    }
+    else if(x %in% c('b', 'B')){
+        r <- 1000000000
+    }
+    else if(x %in% c('M', 'm')){
+        r <- 1000000
+    }
+    else if(x %in% c('K', 'k')) {
+        r <- 1000
+    }
+    else if(x %in% c('H', 'h')){
+        r <- 100
+    }
+    else {
+       r <- 1
+    }
+}            
+
+# Convert property PROPDMGEXP data into numbers and multiply by PROPDMG
+
+facprop <- sapply(storm2$PROPDMGEXP, mult)
+propcost <- facprop*storm2$PROPDMG
+
+# convert crop CROPDMGEXP data into numbers and multiply by CROPDMG
+
+faccrop <- sapply(storm2$CROPDMGEXP, mult)
+cropcost <- faccrop * storm2$CROPDMG
+
+# Create two new columns in storm2 dataframe with calculated property_cost and crop_cost
+
+storm2 <- storm2 %>% mutate(property_cost = propcost,
+                            crop_cost = cropcost)
+
+# Create report with totals for each impact health and economic variable
+
+report <- storm2 %>% summarise(fatalaties = sum(FATALITIES),
+                               injuries = sum(INJURIES),
+                               total_property_cost = sum(property_cost),
+                               total_crop_cost = sum(crop_cost))
+                            
+report
+```
+
+### Reclassify EVTYPES into official 'events' categories if mismatched.
+
+```{r EVTYPEs}
+
+# EVTYPEs from data dictionary. In the data, most of these values are in entered in capital letters.
+
+# Load official events from data dictionary  and convert to all capitals
+
+events <- c('Astronomical Low Tide', 'Avalanche', 'Blizzard', 'Coastal Flood', 'Cold/Wind Chill', 'Debris Flow', 'Dense Fog', 'Dense Smoke', 'Drought', 'Dust Devil', 'Dust Storm', 'Excessive Heat', 'Extreme Cold/Wind Chill', 'Flash Flood', 'Flood', 'Frost/Freeze', 'Funnel Cloud', 'Freezing Fog', 'Hail', 'Heat', 'Heavy Rain', 'Heavy Snow', 'High Surf', 'High Wind', 'Hurricane (Typhoon)', 'Ice Storm', 'Lake-Effect Snow', 'Lakeshore Flood', 'Lightning', 'Marine Hail', 'Marine High Wind', 'Marine Strong Wind', 'Marine Thunderstorm Wind', 'Rip Current', 'Seiche', 'Sleet', 'Storm Surge/Tide', 'Strong Wind', 'Thunderstorm Wind', 'Tornado', 'Tropical Depression', 'Tropical Storm', 'Tsunami', 'Volcanic Ash', 'Waterspout', 'Wildfire', 'Winter Storm', 'Winter Weather')
+
+events <- sapply(events, toupper)
+events <- table(events)
+
+
+# Convert all EVTYPEs to upper case before matching to events table.
+
+storm2$EVTYPE <- sapply(storm2$EVTYPE, toupper)
+
+# Reclassify events with fuzzy matching using minimum maxDist and look at summary report of 
+# incorrectly classified events
+
+s <- amatch(storm2$EVTYPE, events, method = 'osa', maxDist = 1)
+
+# r is the number of records (NA) not matched with minimum maxDist = 1
+
+r <-which(is.na(s))
+
+# Prepare a summary report of these unmatched records in these unmatched records?
+
+l <- storm2$EVTYPE[r]
+
+l <- data.frame(value = l, stringsAsFactors = T)
+
+m <- l %>% group_by(value) %>% summarize(n = n()) %>% arrange(desc(n))
+m
+
+
+```
+There are 61778 records misclassified as 'TSTM' and additional records misclassified with 'TSTM' in the variable values. We will reassign these and other misclassified records to appropriate events values.
+
+```{r cleaning}
+# Store storm EVTYPE in new variable evtype to preserve original data.
+
+evtype <- storm2$EVTYPE
+
+# change 2 cases 'NON-TSTM WIND and NON TSTM WIND to 'STRONG WIND'. Change 'WIND' to 'STRONG WIND'.
+
+a <- str_detect(evtype, 'NON-TSTM')
+storm2$EVTYPE[a] <- 'STONG WIND'
+a <- str_detect(evtype, 'NON TSTM')
+evtype[a] <- 'STRONG WIND'
+a <- str_detect(evtype, 'WIND')
+evtype[a] <- 'STRONG WIND'
+
+# Change all other values containing 'TSTM' to 'THUNDERSTORM WIND'.
+# change all values containing 'MICROBURST' to 'THUNDERSTORM WIND'
+a <- str_detect(evtype, 'TSTM')
+evtype[a] <- 'THUNDERSTORM WIND'
+a <- str_detect(evtype, 'MICROBURST')
+evtype[a] <- 'THUNDERSTORM WIND'
+
+# Change all values containing 'FLD' or 'FLOOD' To 'FLOOD'
+
+a <- str_detect(evtype, 'FLD')
+evtype[a] <- 'FLOOD'
+a <-  str_detect(evtype, 'FLOOD')
+evtype[a] <- 'FLOOD'
+
+# Change all values containing 'FIRE' to 'WILDFIRE'
+
+a <- str_detect(evtype, 'FIRE')
+evtype[a] <- 'WILDFIRE'
+
+# Change all values containing 'HURRICANE' or   'TYPHOON' to '  'HURRICANE (TYPHOON)'.
+
+a <-  str_detect(evtype, 'HURRICANE')
+evtype[a] <- 'HURRICANE (TYPHO0N)'
+a <-  str_detect(evtype, 'TYPHOON')
+evtype[a] <- 'HURRICANE (TYPHO0N)'
+
+# Change all values with 'COLD' to 'EXTREME COLD/WIND CHILL'
+
+a <-  str_detect(evtype, 'COLD')
+evtype[a] <- 'EXTREME COLD/WIND CHILL'
+
+# Change 'STORM SURGE' AND 'SURF' to 'STORM SURGE/TIDE', 
+
+a <-  str_detect(evtype, 'STORM SURGE')
+evtype[a] <- 'STORM SURGE/TIDE'
+a <-  str_detect(evtype, 'SURF')
+evtype[a] <- 'STORM SURGE/TIDE'
+ 
+# Change 'LIGHT SNOW' to 'WINTER WEATHER', Change 'SNOW' to 'HEAVY SNOW'
+a <-  str_detect(evtype, 'LIGHT SNOW')
+evtype[a] <- 'WINTER WEATHER'
+a <-  str_detect(evtype, 'SNOW')
+evtype[a] <- 'HEAVY SNOW'
+
+# Change 'FOG' to 'DENSE FOG'.
+
+a <-  str_detect(evtype, 'FOG')
+evtype[a] <- 'DENSE FOG'
+
+# Change 'WINTER WEATHER/MIX' to 'WINTER WEATHER'
+a <-  str_detect(evtype, 'WINTER')
+evtype[a] <- 'WINTER WEATHER'
+
+# Change 'COASTAL STORM' to 'MARINE THUNDERSTORM WIND'
+a <-  str_detect(evtype, 'COASTAL STORM')
+evtype[a] <- 'MARINE THUNDERSTORM WIND'
+
+# Change 'FREEZ' to 'FROST/FREEZE'
+a <-  str_detect(evtype, 'FREEZ')
+evtype[a] <- 'FROST/FREEZE'
+ 
+# change 'WINT' to 'WINTER WEATHER'
+a <-  str_detect(evtype, 'WINTRY MIX')
+evtype[a] <- 'WINTER WEATHER'
+
+# Change 'GLAZE' to 'ICE STORM'
+a <-  str_detect(evtype, 'GLAZE')
+evtype[a] <- 'ICE STORM'
+
+# Rerun match analysis on on the cleaned data
+
+s <- amatch(evtype, events, method = 'osa', maxDist = 1)
+
+# r is the number of records (NA) not matched with minimum maxDist = 1
+
+r <-which(is.na(s))
+
+# Prepare a summary report of these unmatched records in these unmatched records?
+
+l <- evtype[r]
+
+l <- data.frame(value = l, stringsAsFactors = T)
+
+m1 <- l %>% group_by(value) %>% summarize(n = n()) %>% arrange(desc(n))
+m1
+
+```
+
+Summarize the total property damage, crop damage, injuries, and fatalities from the remaining mismatched records to determine if we have failed to classify significant events.
+
+```{r }
+
+storm3 <- storm2
+storm3$EVTYPE <- evtype
+
+mismatch <- storm3[r,]
+report2 <- mismatch %>% summarize(fatalities = sum(FATALITIES),
+                                  injuries = sum(INJURIES),
+                                  total_property_cost = sum(property_cost),
+                                  total_crop_cost = sum(crop_cost))
+report2
+```
+Our miscellaneous mismatch group only accounts for less than 1% of our total values in all 4 categories. This should not affect our subsequent analysis.
+
+```{r}
+
+
+report3 <- storm3 %>% group_by(EVTYPE) %>% summarize(crop_cost = sum(crop_cost),
+                                                     property_cost = sum(property_cost),
+                                                     fatalities = sum(FATALITIES),
+                                                     injuries = sum(INJURIES)) %>%
+arrange(desc(injuries))
+
+```
