@@ -1,8 +1,11 @@
 ---
-title: 'The Relative Impact of Adverse Weather Events on Health, Crop and Property Losses'
+title: The Relative Impact of Adverse Weather Events on Health, Crop and Property
+  Losses
 author: "Rusell Glynn"
 date: "11/1/2021"
-output: pdf_document
+output:
+  html_document:
+    df_print: paged
 ---
 
 ```{r setup, include=FALSE}
@@ -15,9 +18,9 @@ Adverse weather events are tracked by the U.S National Oceanic and Atmospheric A
 
 1. What types of events (EVTYPE) are most harmful with respect to population health?
 
-2 Across the US, what types of events have the greatest economic impact as measured by property and crop damages?
+2. Across the US, what types of events have the greatest economic impact as measured by property and crop damages?
 
-The raw data has 902297 observations stored in 37 variables. Since only data entered after January, 1996, has complete information on all weather event types (EVTYPE), we will only observations entered after that date. Further, only 8 of the 37 variables have information relevant to the research questions and we will subset the data to only include information in these 8 variables. The population health impact of events will be measured by 'FATALATIES' and 'INJURIES'. The economic impact of weather events is recorded as property and crop dollar losses in 4 separate variables (PROPDMG, PROPDMGEXP, CROPDMG, CROPDMEXP). Data entry errors in the EVTYPE variable complicated the analysis. Using the NOAA data dictionary to inform our decisions, we reclassified  EVTYPE aberrant entries into the official listed categories as completely as possible. Only 350 of 201318 records were not classified in the final data set.
+The raw data has 902297 observations stored in 37 variables. Since only data entered after January, 1996, has complete information on all weather event types (EVTYPE), we will only analyze observations entered after that date. Further, only 8 of the 37 variables have information relevant to the research questions and we will subset the data to only include information in these 8 variables. The population health impact of events will be measured by 'FATALATIES' and 'INJURIES'. The economic impact of weather events is recorded as property and crop dollar losses in 4 separate variables (PROPDMG, PROPDMGEXP, CROPDMG, CROPDMEXP). Data entry errors in the EVTYPE variable complicated the analysis. Using the NOAA data dictionary to inform our decisions, we reclassified  EVTYPE aberrant entries into the official listed categories as completely as possible. Only 350 of 201318 records were not classified in the final data set.
 
 
 ## Data Processing
@@ -29,10 +32,12 @@ The raw data has 902297 observations stored in 37 variables. Since only data ent
 library(dplyr)
 library(readr)
 library(lubridate)
-library(naniar)
+library(ggplot2)
 library(stringdist)
 library(fuzzyjoin)
 library(stringr)
+library(forcats)
+library(gridExtra)
 ```
 
 ### Copy file and store locally. Load file into memory as 'storm'.
@@ -68,7 +73,8 @@ storm2 <- storm %>% select(BGN_DATE, EVTYPE, FATALITIES, INJURIES, PROPDMG, PROP
 storm2$BGN_DATE <- as.POSIXlt(storm2$BGN_DATE, format = '%m/%d/%Y %H:%M:%S')
 storm2 <- storm2 %>% filter(BGN_DATE>= as.Date('1996/01/01', format = '%Y/%m/%d'))
 
-# include only records with values other than 0 in the 4 variables with health effects and economic costs.
+# include only records with values other than 0 in the 4 variables with health effects
+# and economic costs.
 
 storm2 <- storm2 %>% filter(FATALITIES != 0 | INJURIES != 0 | PROPDMG != 0 | CROPDMG != 0)
 ```
@@ -124,9 +130,15 @@ report <- storm2 %>% summarise(fatalaties = sum(FATALITIES),
                                injuries = sum(INJURIES),
                                total_property_cost = sum(property_cost),
                                total_crop_cost = sum(crop_cost))
-                            
-report
+
 ```
+We have the summary report for the total aggregated values for fatalities, injuries, total_property_cost, and total_crop_cost.
+
+```{r }
+report
+
+```
+
 
 ### Reclassify EVTYPES into official 'events' categories if mismatched.
 
@@ -166,9 +178,10 @@ m
 
 
 ```
-There are 61778 records misclassified as 'TSTM' and additional records misclassified with 'TSTM' in the variable values. We will reassign these and other misclassified records to appropriate events values.
+There are 61778 records misclassified as 'TSTM' and additional records misclassified with 'TSTM' in the variable values. We will reassign these and other misclassified records to the appropriate events values.
 
 ```{r cleaning}
+
 # Store storm EVTYPE in new variable evtype to preserve original data.
 
 evtype <- storm2$EVTYPE
@@ -251,23 +264,6 @@ evtype[a] <- 'WINTER WEATHER'
 a <-  str_detect(evtype, 'GLAZE')
 evtype[a] <- 'ICE STORM'
 
-# Rerun match analysis on on the cleaned data
-
-s <- amatch(evtype, events, method = 'osa', maxDist = 1)
-
-# r is the number of records (NA) not matched with minimum maxDist = 1
-
-r <-which(is.na(s))
-
-# Prepare a summary report of these unmatched records in these unmatched records?
-
-l <- evtype[r]
-
-l <- data.frame(value = l, stringsAsFactors = T)
-
-m1 <- l %>% group_by(value) %>% summarize(n = n()) %>% arrange(desc(n))
-m1
-
 ```
 
 Summarize the total property damage, crop damage, injuries, and fatalities from the remaining mismatched records to determine if we have failed to classify significant events.
@@ -284,15 +280,63 @@ report2 <- mismatch %>% summarize(fatalities = sum(FATALITIES),
                                   total_crop_cost = sum(crop_cost))
 report2
 ```
-Our miscellaneous mismatch group only accounts for less than 1% of our total values in all 4 categories. This should not affect our subsequent analysis.
+Our miscellaneous mismatch group only accounts for less than 1% of our total values in all 4 categories. They should not affect our subsequent analysis.
+
+# Results
+
+## 1. Health effects results.
+
+We group the data by 'EVTYPE', calculate the total fatalities and injuries for each 'EVTYPE', filter the top 10 EVTYPES and present a bar graph of the results. There is a good but not perfect correlation between the events that result in fatalities and as opposed to injuries.
 
 ```{r}
 
 
-report3 <- storm3 %>% group_by(EVTYPE) %>% summarize(crop_cost = sum(crop_cost),
-                                                     property_cost = sum(property_cost),
-                                                     fatalities = sum(FATALITIES),
-                                                     injuries = sum(INJURIES)) %>%
-arrange(desc(injuries))
+report3 <- storm3 %>% group_by(EVTYPE) %>% summarize(fatalities = sum(FATALITIES))%>% 
+    top_n(10) %>% arrange(desc(fatalities)) %>%
+    ggplot(aes(x=fatalities, EVTYPE, fill = EVTYPE)) + stat_summary(fun = mean, geom="bar") +
+    aes(y = fct_reorder(EVTYPE, fatalities)) +
+    ylab('Weather Events') +
+    xlab('Number of Fatalities') +
+    theme(legend.position = "none")
+
+
+
+report4 <- storm3 %>% group_by(EVTYPE) %>% summarize(injuries = sum(INJURIES)) %>% 
+    top_n(10) %>% arrange(desc(injuries)) %>%
+    ggplot(aes(x=injuries, EVTYPE, fill = EVTYPE)) + stat_summary(fun = mean, geom="bar") +
+    aes(y = fct_reorder(EVTYPE, injuries)) +
+    ylab('Weather Events') +
+    xlab('Number of Injuries') +
+    theme(legend.position = "none")
+
+grid.arrange(report3, report4, ncol=2, top = 'US Fatalities and Injuries Caused by Weather')
+
+
+```
+
+## 2. Economic effects results.
+
+We group the data by 'EVTYPE', calculate the total property and crop losses for each 'EVTYPE', filter the top 10 EVTYPES and present a bar graph of the results. There is substantial overlap between the weather events that cause crop and property damage. However, drought is not a major  of property damage and hurricanes are not in the top 10 causes of crop damage. Cold weather events are 9 and 10 in both categories but are coded differently in the data for the two loss categories.
+
+```{r warning=F}
+report5 <- storm3 %>% group_by(EVTYPE) %>% summarize(total_property_cost = sum(property_cost)) %>%     top_n(10) %>% arrange(desc(total_property_cost)) %>%
+    ggplot(aes(x=total_property_cost, EVTYPE, fill = EVTYPE)) + 
+    stat_summary(fun = mean, geom="bar") +
+    aes(y = fct_reorder(EVTYPE, total_property_cost)) +
+    ylab('Weather Events') +
+    xlab('Total Property Cost (dollars)') +
+    theme(legend.position = "none")
+
+
+
+report6 <- storm3 %>% group_by(EVTYPE) %>% summarize(total_crop_cost = sum(crop_cost)) %>%             top_n(10) %>% arrange(desc(total_crop_cost)) %>%
+    ggplot(aes(x=total_crop_cost, EVTYPE, fill = EVTYPE)) + stat_summary(fun = mean, geom="bar") +
+    aes(y = fct_reorder(EVTYPE, total_crop_cost)) +
+    ylab('Weather Events') +
+    xlab('Total Crop Cost (dollars') +
+    theme(legend.position = "none")
+
+grid.arrange(report5, report6, ncol=1, top = 'US Property and Crop  Losses Caused by Weather')
+
 
 ```
